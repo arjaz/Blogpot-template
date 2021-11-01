@@ -56,8 +56,8 @@ runBlogpostDatabaseAsIO = reinterpret $ \case
     blogposts :: [(UUID, Text, Text)] <-
       embed . runSelect conn $ findBlogpostById bId
     case blogposts of
-      ((_, name, body) : _) -> pure . Just $ Blogpost name body
-      []                    -> pure Nothing
+      (_, name, body) : _ -> pure . Just $ Blogpost name body
+      []                  -> pure Nothing
   AddOne (Blogpost name body) -> do
     conn     <- Input.input
     inserted <- embed . runInsert_ conn $ insertBlogpost Nothing name body
@@ -114,4 +114,3 @@ deleteBlogpost id_ = Delete { dTable = blogpostsTable
 
 connection :: IO Connection
 connection = connectPostgreSQL "dbname='blogpot'"
-
