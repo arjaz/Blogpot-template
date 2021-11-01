@@ -15,11 +15,13 @@
 
 module Server where
 
+import           AppConfig
 import           Blogpost
 import           Data.Functor                   ( ($>) )
 import           Data.Maybe                     ( maybeToList )
 import           Data.Text                      ( Text )
 import qualified Data.Text                     as Text
+import qualified Data.Text.Encoding            as Text
 import           Data.UUID                      ( UUID )
 import           Database                       ( Database )
 import qualified Database
@@ -47,17 +49,16 @@ type Api = HealthcheckApi :<|> BlogpostsApi
 api :: Proxy Api
 api = Proxy
 
-authCheck :: BasicAuthCheck ()
-authCheck =
-  -- TODO: make it configurable
+authCheck :: Text -> Text -> BasicAuthCheck ()
+authCheck user pass =
   let check (BasicAuthData username password) =
-        if username == "servant" && password == "servant"
+        if username == Text.encodeUtf8 user && password == Text.encodeUtf8 pass
           then pure (Authorized ())
           else pure Unauthorized
   in  BasicAuthCheck check
 
-basicAuthServerContext :: Context (BasicAuthCheck () : '[])
-basicAuthServerContext = authCheck :. EmptyContext
+basicAuthServerContext :: Text -> Text -> Context (BasicAuthCheck () : '[])
+basicAuthServerContext user pass = authCheck user pass :. EmptyContext
 
 basicAuthServerContextProxy :: Proxy '[BasicAuthCheck ()]
 basicAuthServerContextProxy = Proxy
@@ -66,16 +67,19 @@ serveSemServer
   :: ServerT
        Api
        (Sem '[Error ServerError , Logging , Database UUID Blogpost , Embed IO])
+  -> AppConfig
   -> Application
-serveSemServer s = serveWithContext
+serveSemServer s config = serveWithContext
   api
-  basicAuthServerContext
+  (basicAuthServerContext user pass)
   (hoistServerWithContext api
                           basicAuthServerContextProxy
                           (semHandler lowerToIO)
                           s
   )
  where
+  user = appConfigUser config
+  pass = appConfigPass config
   lowerToIO =
     runM
       . Database.runDatabaseConnectionAsIO
@@ -106,11 +110,22 @@ getBlogposts (Just bId) = do
 
 postBlogpost
   :: Members '[Database UUID Blogpost , Logging] r => Blogpost -> Sem r UUID
-postBlogpost blogpost = Output.output ("Posting " <> Text.pack (show blogpost))
-  >> Database.addOne blogpost
+postBlogpost blogpost = do
+  uuid <- Database.addOne blogpost
+  Output.output
+    $  "Added blogpost "
+    <> Text.pack (show blogpost)
+    <> " with id "
+    <> Text.pack (show uuid)
+  pure uuid
 
 deleteBlogpost
   :: Members '[Database UUID Blogpost , Logging] r => UUID -> Sem r Bool
-deleteBlogpost bId =
-  Output.output ("Deletion of blogpost with id " <> Text.pack (show bId))
-    >> Database.deleteOne bId
+deleteBlogpost bId = do
+  isDeleted <- Database.deleteOne bId
+  case isDeleted of
+    False -> Output.output
+      ("Failed to detele a blogpost with id " <> Text.pack (show bId))
+    True ->
+      Output.output ("Deteled a blogpost with id " <> Text.pack (show bId))
+  pure isDeleted
